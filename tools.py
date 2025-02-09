@@ -124,7 +124,6 @@ class Logger:
         value = value.transpose(1, 4, 2, 0, 3).reshape((1, T, C, H, B * W))
         self._writer.add_video(name, value, step, 16)
 
-
 def simulate(
     agent,
     envs,
@@ -137,7 +136,11 @@ def simulate(
     episodes=0,
     state=None,
 ):
-    # initialize or unpack simulation state
+    """
+    模拟函数用于控制智能体与环境的交互过程，并管理交互数据的存储。
+    """
+
+    # 初始化或解包模拟状态
     if state is None:
         step, episode = 0, 0
         done = np.ones(len(envs), bool)
@@ -147,25 +150,40 @@ def simulate(
         reward = [0] * len(envs)
     else:
         step, episode, done, length, obs, agent_state, reward = state
+
+    # 主循环：根据指定的最大步数或回合数进行模拟
     while (steps and step < steps) or (episodes and episode < episodes):
-        # reset envs if necessary
+
+        # 如果有环境结束，则重置这些环境
         if done.any():
             indices = [index for index, d in enumerate(done) if d]
             results = [envs[i].reset() for i in indices]
+            # results = a[0][1]
+            # results= [envs[i].reset() for i in indices]
             results = [r() for r in results]
+            # results = results
+            # 提取 results 中的字典部分并保存为一个列表
+            # results_dicts = [result[1] for result in results]
+            # 打印结果
+            # print(results_dicts)
+            # results = results_dicts
+
+            # 在处理结果时，确保result已经被正确赋值
             for index, result in zip(indices, results):
+                # if result is not None and isinstance(result, tuple):
+                #     result = list(result)  # 仅在必要时进行类型转换
                 t = result.copy()
-                t = {k: convert(v) for k, v in t.items()}
-                # action will be added to transition in add_to_cache
+                # t = {k: convert(v) for k, v in t.items()}
                 t["reward"] = 0.0
                 t["discount"] = 1.0
-                # initial state should be added to cache
                 add_to_cache(cache, envs[index].id, t)
-                # replace obs with done by initial state
                 obs[index] = result
-        # step agents
+
+        # 根据当前观测值生成动作
         obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
         action, agent_state = agent(obs, done, agent_state)
+
+        # 处理动作格式
         if isinstance(action, dict):
             action = [
                 {k: np.array(action[k][i].detach().cpu()) for k in action}
@@ -173,46 +191,53 @@ def simulate(
             ]
         else:
             action = np.array(action)
+
         assert len(action) == len(envs)
-        # step envs
+
+        # 执行动作并与环境交互
         results = [e.step(a) for e, a in zip(envs, action)]
         results = [r() for r in results]
         obs, reward, done = zip(*[p[:3] for p in results])
         obs = list(obs)
         reward = list(reward)
         done = np.stack(done)
+
         episode += int(done.sum())
         length += 1
         step += len(envs)
         length *= 1 - done
-        # add to cache
+
+        # 将交互数据添加到缓存中
         for a, result, env in zip(action, results, envs):
             o, r, d, info = result
             o = {k: convert(v) for k, v in o.items()}
             transition = o.copy()
+
             if isinstance(a, dict):
                 transition.update(a)
             else:
                 transition["action"] = a
+
             transition["reward"] = r
             transition["discount"] = info.get("discount", np.array(1 - float(d)))
             add_to_cache(cache, env.id, transition)
 
+        # 记录已完成的回合信息
         if done.any():
             indices = [index for index, d in enumerate(done) if d]
-            # logging for done episode
+
             for i in indices:
                 save_episodes(directory, {envs[i].id: cache[envs[i].id]})
                 length = len(cache[envs[i].id]["reward"]) - 1
                 score = float(np.array(cache[envs[i].id]["reward"]).sum())
                 video = cache[envs[i].id]["image"]
-                # record logs given from environments
+
+                # 记录环境提供的日志信息
                 for key in list(cache[envs[i].id].keys()):
                     if "log_" in key:
                         logger.scalar(
                             key, float(np.array(cache[envs[i].id][key]).sum())
                         )
-                        # log items won't be used later
                         cache[envs[i].id].pop(key)
 
                 if not is_eval:
@@ -227,7 +252,7 @@ def simulate(
                         eval_lengths = []
                         eval_scores = []
                         eval_done = False
-                    # start counting scores for evaluation
+
                     eval_scores.append(score)
                     eval_lengths.append(length)
 
@@ -241,11 +266,176 @@ def simulate(
                         logger.scalar(f"eval_episodes", len(eval_scores))
                         logger.write(step=logger.step)
                         eval_done = True
+
     if is_eval:
-        # keep only last item for saving memory. this cache is used for video_pred later
+        # 在评估模式下，仅保留最后一个条目以节省内存
         while len(cache) > 1:
-            # FIFO
             cache.popitem(last=False)
+
+    return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
+
+def old_simulate(
+    agent,
+    envs,
+    cache,
+    directory,
+    logger,
+    is_eval=False,
+    limit=None,
+    steps=0,
+    episodes=0,
+    state=None,
+):
+    """
+    模拟函数用于控制智能体与环境的交互过程，并管理交互数据的存储。
+
+    参数:
+    - agent: 智能体对象，负责根据观测值生成动作。
+    - envs: 环境列表，每个元素代表一个独立的环境实例。
+    - cache: 用于存储交互数据的缓存字典。
+    - directory: 存储路径，用于保存日志和视频等数据。
+    - logger: 日志记录器，用于记录训练和评估过程中的指标。
+    - is_eval: 布尔值，表示当前是否为评估模式，默认为False。
+    - limit: 数据集大小限制，默认为None。
+    - steps: 最大步数限制，默认为0（无限制）。
+    - episodes: 最大回合数限制，默认为0（无限制）。
+    - state: 初始状态，默认为None，表示从头开始模拟。
+
+    返回值:
+    - step - steps: 实际执行的步数。
+    - episode - episodes: 实际完成的回合数。
+    - done: 当前所有环境是否结束的布尔数组。
+    - length: 每个环境当前回合的长度。
+    - obs: 当前所有环境的观测值。
+    - agent_state: 智能体的状态。
+    - reward: 当前所有环境的奖励值。
+    """
+
+    # 初始化或解包模拟状态
+    if state is None:
+        step, episode = 0, 0
+        done = np.ones(len(envs), bool)
+        length = np.zeros(len(envs), np.int32)
+        obs = [None] * len(envs)
+        agent_state = None
+        reward = [0] * len(envs)
+    else:
+        step, episode, done, length, obs, agent_state, reward = state
+
+    # 主循环：根据指定的最大步数或回合数进行模拟
+    while (steps and step < steps) or (episodes and episode < episodes):
+
+        # 如果有环境结束，则重置这些环境
+        if done.any():
+            indices = [index for index, d in enumerate(done) if d]
+            results = [envs[i].reset() for i in indices]
+            results = [r() for r in results]
+
+            # 处理重置后的结果并更新缓存
+            if result is not None and isinstance(result, tuple):
+                result = list(result)
+
+            for index, result in zip(indices, results):
+                t = result.copy()
+                t = {k: convert(v) for k, v in t.items()}
+                t["reward"] = 0.0
+                t["discount"] = 1.0
+                add_to_cache(cache, envs[index].id, t)
+                obs[index] = result
+
+        # 根据当前观测值生成动作
+        obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
+        action, agent_state = agent(obs, done, agent_state)
+
+        # 处理动作格式
+        if isinstance(action, dict):
+            action = [
+                {k: np.array(action[k][i].detach().cpu()) for k in action}
+                for i in range(len(envs))
+            ]
+        else:
+            action = np.array(action)
+
+        assert len(action) == len(envs)
+
+        # 执行动作并与环境交互
+        results = [e.step(a) for e, a in zip(envs, action)]
+        results = [r() for r in results]
+        obs, reward, done = zip(*[p[:3] for p in results])
+        obs = list(obs)
+        reward = list(reward)
+        done = np.stack(done)
+
+        episode += int(done.sum())
+        length += 1
+        step += len(envs)
+        length *= 1 - done
+
+        # 将交互数据添加到缓存中
+        for a, result, env in zip(action, results, envs):
+            o, r, d, info = result
+            o = {k: convert(v) for k, v in o.items()}
+            transition = o.copy()
+
+            if isinstance(a, dict):
+                transition.update(a)
+            else:
+                transition["action"] = a
+
+            transition["reward"] = r
+            transition["discount"] = info.get("discount", np.array(1 - float(d)))
+            add_to_cache(cache, env.id, transition)
+
+        # 记录已完成的回合信息
+        if done.any():
+            indices = [index for index, d in enumerate(done) if d]
+
+            for i in indices:
+                save_episodes(directory, {envs[i].id: cache[envs[i].id]})
+                length = len(cache[envs[i].id]["reward"]) - 1
+                score = float(np.array(cache[envs[i].id]["reward"]).sum())
+                video = cache[envs[i].id]["image"]
+
+                # 记录环境提供的日志信息
+                for key in list(cache[envs[i].id].keys()):
+                    if "log_" in key:
+                        logger.scalar(
+                            key, float(np.array(cache[envs[i].id][key]).sum())
+                        )
+                        cache[envs[i].id].pop(key)
+
+                if not is_eval:
+                    step_in_dataset = erase_over_episodes(cache, limit)
+                    logger.scalar(f"dataset_size", step_in_dataset)
+                    logger.scalar(f"train_return", score)
+                    logger.scalar(f"train_length", length)
+                    logger.scalar(f"train_episodes", len(cache))
+                    logger.write(step=logger.step)
+                else:
+                    if not "eval_lengths" in locals():
+                        eval_lengths = []
+                        eval_scores = []
+                        eval_done = False
+
+                    eval_scores.append(score)
+                    eval_lengths.append(length)
+
+                    score = sum(eval_scores) / len(eval_scores)
+                    length = sum(eval_lengths) / len(eval_lengths)
+                    logger.video(f"eval_policy", np.array(video)[None])
+
+                    if len(eval_scores) >= episodes and not eval_done:
+                        logger.scalar(f"eval_return", score)
+                        logger.scalar(f"eval_length", length)
+                        logger.scalar(f"eval_episodes", len(eval_scores))
+                        logger.write(step=logger.step)
+                        eval_done = True
+
+    if is_eval:
+        # 在评估模式下，仅保留最后一个条目以节省内存
+        while len(cache) > 1:
+            cache.popitem(last=False)
+
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
 
 
