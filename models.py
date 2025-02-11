@@ -1,7 +1,7 @@
 import copy
 import torch
 from torch import nn
-
+import gymnasium as gym
 import networks
 import tools
 
@@ -32,7 +32,14 @@ class WorldModel(nn.Module):
         self._step = step
         self._use_amp = True if config.precision == 16 else False
         self._config = config
-        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        # shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        if isinstance(obs_space, gym.spaces.Box):
+            # shapes = {k: tuple(obs_space.shape) for k in range(1)}  # 直接获取 shape 属性
+            shapes = {'state': tuple(obs_space.shape)}  # 将键改为 'state'
+        elif isinstance(obs_space, gym.spaces.Dict):
+            shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}  # 如果是 Dict 类型，则继续使用 spaces
+        else:
+            raise NotImplementedError(f"Unsupported observation space: {type(obs_space)}")
         self.encoder = networks.MultiEncoder(shapes, **config.encoder)
         self.embed_size = self.encoder.outdim
         self.dynamics = networks.RSSM(
@@ -113,7 +120,8 @@ class WorldModel(nn.Module):
         data = self.preprocess(data)
 
         with tools.RequiresGrad(self):
-            with torch.cuda.amp.autocast(self._use_amp):
+            # with torch.cuda.amp.autocast(self._use_amp):
+            with torch.amp.autocast('cuda', enabled=self._use_amp):
                 embed = self.encoder(data)
                 post, prior = self.dynamics.observe(
                     embed, data["action"], data["is_first"]
@@ -154,7 +162,8 @@ class WorldModel(nn.Module):
         metrics["dyn_loss"] = to_np(dyn_loss)
         metrics["rep_loss"] = to_np(rep_loss)
         metrics["kl"] = to_np(torch.mean(kl_value))
-        with torch.cuda.amp.autocast(self._use_amp):
+        # with torch.cuda.amp.autocast(self._use_amp):
+        with torch.amp.autocast('cuda', enabled=self._use_amp):
             metrics["prior_ent"] = to_np(
                 torch.mean(self.dynamics.get_dist(prior).entropy())
             )
@@ -170,22 +179,31 @@ class WorldModel(nn.Module):
         post = {k: v.detach() for k, v in post.items()}
         return post, context, metrics
 
-    # this function is called during both rollout and training
     def preprocess(self, obs):
+        # 将观测值中的每个元素转换为 PyTorch 张量，并设置设备和数据类型为 float32
         obs = {
             k: torch.tensor(v, device=self._config.device, dtype=torch.float32)
             for k, v in obs.items()
         }
-        obs["image"] = obs["image"] / 255.0
+
+        # 对图像数据进行归一化处理，将其值缩放到 [0, 1] 范围内
+        # obs["image"] = obs["image"] / 255.0
+
+        # 如果存在折扣因子 discount，则根据配置调整其值，并扩展其维度
         if "discount" in obs:
             obs["discount"] *= self._config.discount
             # (batch_size, batch_length) -> (batch_size, batch_length, 1)
             obs["discount"] = obs["discount"].unsqueeze(-1)
-        # 'is_first' is necesarry to initialize hidden state at training
+
+        # 'is_first' 是必要的，用于在训练时初始化隐藏状态
         assert "is_first" in obs
-        # 'is_terminal' is necesarry to train cont_head
+
+        # 'is_terminal' 是必要的，用于训练连续动作头
         assert "is_terminal" in obs
+
+        # 计算并添加 'cont' 键，表示是否处于非终止状态
         obs["cont"] = (1.0 - obs["is_terminal"]).unsqueeze(-1)
+
         return obs
 
     def video_pred(self, data):
@@ -293,7 +311,8 @@ class ImagBehavior(nn.Module):
         metrics = {}
 
         with tools.RequiresGrad(self.actor):
-            with torch.cuda.amp.autocast(self._use_amp):
+            # with torch.cuda.amp.autocast(self._use_amp):
+            with torch.amp.autocast('cuda', enabled=self._use_amp):
                 imag_feat, imag_state, imag_action = self._imagine(
                     start, self.actor, self._config.imag_horizon
                 )
@@ -317,7 +336,8 @@ class ImagBehavior(nn.Module):
                 value_input = imag_feat
 
         with tools.RequiresGrad(self.value):
-            with torch.cuda.amp.autocast(self._use_amp):
+            # with torch.cuda.amp.autocast(self._use_amp):
+            with torch.amp.autocast('cuda', enabled=self._use_amp):
                 value = self.value(value_input[:-1].detach())
                 target = torch.stack(target, dim=1)
                 # (time, batch, 1), (time, batch, 1) -> (time, batch)

@@ -374,6 +374,7 @@ def main(config):
         if config.eval_episode_num > 0:
             print("Start evaluation.")
             eval_policy = functools.partial(agent, training=False)
+            # 评估代理
             tools.simulate(
                 eval_policy,
                 eval_envs,
@@ -388,6 +389,7 @@ def main(config):
                 logger.video("eval_openl", to_np(video_pred))
 
         print("Start training.")
+        # 训练代理
         state = tools.simulate(
             agent,
             train_envs,

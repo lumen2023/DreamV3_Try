@@ -156,12 +156,30 @@ def simulate(
 
         # 如果有环境结束，则重置这些环境
         if done.any():
+            print("Resetting environments.")
             indices = [index for index, d in enumerate(done) if d]
+
+            #列表形式
             results = [envs[i].reset() for i in indices]
-            # results = a[0][1]
-            # results= [envs[i].reset() for i in indices]
+
             results = [r() for r in results]
-            # results = results
+
+            # 创建新的列表，将每个结果转换为字典
+            list4 = []
+            for state, env_info in results:
+                # 提取并构建字典
+                result_dict = {
+                    'state': state,  # 将状态向量存入字典
+                    'is_first': True,  # 将状态向量存入字典
+                    'is_terminal': False,  # 将状态向量存入字典
+                }
+
+                # 将字典加入到 list4
+                list4.append(result_dict)
+            # 打印转换后的 list4
+            results = list4
+
+            # results = results[0][0]
             # 提取 results 中的字典部分并保存为一个列表
             # results_dicts = [result[1] for result in results]
             # 打印结果
@@ -170,14 +188,17 @@ def simulate(
 
             # 在处理结果时，确保result已经被正确赋值
             for index, result in zip(indices, results):
-                # if result is not None and isinstance(result, tuple):
-                #     result = list(result)  # 仅在必要时进行类型转换
+
                 t = result.copy()
                 # t = {k: convert(v) for k, v in t.items()}
                 t["reward"] = 0.0
                 t["discount"] = 1.0
                 add_to_cache(cache, envs[index].id, t)
                 obs[index] = result
+            # print("如果有环境结束, type(obs)",type(obs))  # 查看 obs 的类型
+            # print("如果有环境结束, obs", obs)  # 查看 obs[0] 的内容
+        # print(type(obs))  # 查看 obs 的类型
+        # print(obs[0])  # 查看 obs[0] 的内容
 
         # 根据当前观测值生成动作
         obs = {k: np.stack([o[k] for o in obs]) for k in obs[0] if "log_" not in k}
@@ -191,18 +212,28 @@ def simulate(
             ]
         else:
             action = np.array(action)
-
         assert len(action) == len(envs)
 
         # 执行动作并与环境交互
         results = [e.step(a) for e, a in zip(envs, action)]
         results = [r() for r in results]
-        obs, reward, done = zip(*[p[:3] for p in results])
+
+        obs, reward, done, info = zip(*[p[:4] for p in results])
         obs = list(obs)
+        obs_list = []
+        for state,i in zip(obs, info):
+            # 检查是否是回合的第一步
+            state1 = {"state":state,
+                      "is_first": i["is_first"],
+                      "is_terminal": i["crashed"],}
+            obs_list.append(state1)
+        obs = obs_list.copy()
+        # print("obs", obs)
+
         reward = list(reward)
         done = np.stack(done)
 
-        episode += int(done.sum())
+        episode += int(done.sum()) # 更新回合数
         length += 1
         step += len(envs)
         length *= 1 - done
@@ -210,7 +241,15 @@ def simulate(
         # 将交互数据添加到缓存中
         for a, result, env in zip(action, results, envs):
             o, r, d, info = result
-            o = {k: convert(v) for k, v in o.items()}
+            o = {"state": o,
+                "is_first": info["is_first"],
+                "is_terminal": info["crashed"], }
+            if isinstance(o, dict):
+                # 如果 o 是字典，使用 items 转换
+                o = {k: convert(v) for k, v in o.items()}
+            else:
+                # 如果 o 是 numpy.ndarray，直接进行转换
+                o = convert(o)
             transition = o.copy()
 
             if isinstance(a, dict):
@@ -230,7 +269,7 @@ def simulate(
                 save_episodes(directory, {envs[i].id: cache[envs[i].id]})
                 length = len(cache[envs[i].id]["reward"]) - 1
                 score = float(np.array(cache[envs[i].id]["reward"]).sum())
-                video = cache[envs[i].id]["image"]
+                # video = cache[envs[i].id]["image"]
 
                 # 记录环境提供的日志信息
                 for key in list(cache[envs[i].id].keys()):
@@ -258,7 +297,7 @@ def simulate(
 
                     score = sum(eval_scores) / len(eval_scores)
                     length = sum(eval_lengths) / len(eval_lengths)
-                    logger.video(f"eval_policy", np.array(video)[None])
+                    # logger.video(f"eval_policy", np.array(video)[None])
 
                     if len(eval_scores) >= episodes and not eval_done:
                         logger.scalar(f"eval_return", score)
@@ -275,6 +314,7 @@ def simulate(
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
 
 def old_simulate(
+# def simulate(
     agent,
     envs,
     cache,
@@ -331,10 +371,6 @@ def old_simulate(
             results = [envs[i].reset() for i in indices]
             results = [r() for r in results]
 
-            # 处理重置后的结果并更新缓存
-            if result is not None and isinstance(result, tuple):
-                result = list(result)
-
             for index, result in zip(indices, results):
                 t = result.copy()
                 t = {k: convert(v) for k, v in t.items()}
@@ -363,6 +399,7 @@ def old_simulate(
         results = [r() for r in results]
         obs, reward, done = zip(*[p[:3] for p in results])
         obs = list(obs)
+        # print(obs)
         reward = list(reward)
         done = np.stack(done)
 
@@ -391,10 +428,10 @@ def old_simulate(
             indices = [index for index, d in enumerate(done) if d]
 
             for i in indices:
-                save_episodes(directory, {envs[i].id: cache[envs[i].id]})
+                # save_episodes(directory, {envs[i].id: cache[envs[i].id]})
                 length = len(cache[envs[i].id]["reward"]) - 1
                 score = float(np.array(cache[envs[i].id]["reward"]).sum())
-                video = cache[envs[i].id]["image"]
+                # video = cache[envs[i].id]["image"]
 
                 # 记录环境提供的日志信息
                 for key in list(cache[envs[i].id].keys()):
@@ -422,7 +459,7 @@ def old_simulate(
 
                     score = sum(eval_scores) / len(eval_scores)
                     length = sum(eval_lengths) / len(eval_lengths)
-                    logger.video(f"eval_policy", np.array(video)[None])
+                    # logger.video(f"eval_policy", np.array(video)[None])
 
                     if len(eval_scores) >= episodes and not eval_done:
                         logger.scalar(f"eval_return", score)
@@ -438,20 +475,37 @@ def old_simulate(
 
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
 
-
 def add_to_cache(cache, id, transition):
+    """
+    将转换信息添加到缓存中。
+
+    如果 ID 不存在于缓存中，则创建一个新的条目并初始化转换信息。
+    如果 ID 已存在于缓存中，则根据规则追加转换信息。
+
+    参数：
+    - cache: dict, 存储数据的缓存。
+    - id: 标识符，用于确定要更新的缓存条目。
+    - transition: dict, 要添加到缓存中的转换信息。
+    """
+
+    # 检查 ID 是否已存在于缓存中
     if id not in cache:
+        # 如果不存在，为该 ID 创建一个新条目并初始化其转换信息
         cache[id] = dict()
+        # 将转换信息转换后存储
         for key, val in transition.items():
             cache[id][key] = [convert(val)]
     else:
+        # 如果 ID 已存在，根据规则追加转换信息
         for key, val in transition.items():
             if key not in cache[id]:
-                # fill missing data(action, etc.) at second time
+                # 补充缺失的数据（例如动作等）在第二次出现时
                 cache[id][key] = [convert(0 * val)]
                 cache[id][key].append(convert(val))
             else:
+                # 追加新的转换信息
                 cache[id][key].append(convert(val))
+
 
 
 def erase_over_episodes(cache, dataset_size):
@@ -467,7 +521,7 @@ def erase_over_episodes(cache, dataset_size):
     return step_in_dataset
 
 
-def convert(value, precision=32):
+def old_convert(value, precision=32):
     value = np.array(value)
     if np.issubdtype(value.dtype, np.floating):
         dtype = {16: np.float16, 32: np.float32, 64: np.float64}[precision]
@@ -482,17 +536,77 @@ def convert(value, precision=32):
     return value.astype(dtype)
 
 
+def convert(value, precision=32):
+    # 将值转换为 numpy 数组
+    value = np.array(value)
+
+    # 处理浮点数类型
+    if np.issubdtype(value.dtype, np.floating):
+        dtype = {16: np.float16, 32: np.float32, 64: np.float64}[precision]
+
+    # 处理有符号整数类型
+    elif np.issubdtype(value.dtype, np.signedinteger):
+        dtype = {16: np.int16, 32: np.int32, 64: np.int64}[precision]
+
+    # 处理无符号整数类型
+    elif np.issubdtype(value.dtype, np.uint8):
+        dtype = np.uint8
+
+    # 处理布尔类型
+    elif np.issubdtype(value.dtype, bool):
+        dtype = bool
+
+    # 处理 object 类型
+    elif np.issubdtype(value.dtype, np.object_):
+        # 如果是 object 类型，可以选择将其转换为字符串，或其他类型
+        # 举个例子，转为字符串
+        value = np.array([str(v) for v in value])
+        dtype = np.object_
+
+    else:
+        raise NotImplementedError(value.dtype)
+
+    # 执行类型转换
+    return value.astype(dtype)
+
+
 def save_episodes(directory, episodes):
+    """
+    保存剧集数据到指定目录。
+
+    本函数将一系列剧集数据保存到给定的目录中，每个剧集数据以压缩的NumPy格式(.npz)单独保存，
+    文件名包含剧集的长度。
+
+    参数:
+    directory (str): 保存剧集数据的目录路径，可以是相对路径或绝对路径。
+    episodes (dict): 包含剧集数据的字典，其中键是剧集的文件名，值是剧集数据的字典。
+
+    返回:
+    bool: 剧集数据保存成功后返回True。
+    """
+    # 扩展用户目录并确保目录存在
     directory = pathlib.Path(directory).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
+
+    # 遍历剧集字典，保存每个剧集
     for filename, episode in episodes.items():
+        # 获取剧集奖励的长度，用于文件命名
         length = len(episode["reward"])
+        # 构造带有剧集长度的文件路径
         filename = directory / f"{filename}-{length}.npz"
+
+        # 使用io.BytesIO临时保存剧集数据，然后写入到文件中
         with io.BytesIO() as f1:
+            # 将剧集数据以压缩的NumPy格式保存到BytesIO对象中
             np.savez_compressed(f1, **episode)
+            # 将文件指针重置为0，以便从头开始读取数据
             f1.seek(0)
+
+            # 打开文件以二进制写入模式，将BytesIO中的数据写入文件
             with filename.open("wb") as f2:
                 f2.write(f1.read())
+
+    # 剧集数据保存成功
     return True
 
 
@@ -552,37 +666,76 @@ def sample_episodes(episodes, length, seed=0):
 
 
 def load_episodes(directory, limit=None, reverse=True):
+    """
+    从指定目录加载剧集数据。
+
+    参数:
+    - directory (str): 包含剧集文件的目录路径。
+    - limit (int, optional): 加载的最大步数限制。如果为 None，则没有限制。
+    - reverse (bool, optional): 是否按逆序加载文件。默认为 True。
+
+    返回:
+    - episodes (OrderedDict): 按文件名排序的剧集数据字典，键为文件名（不带扩展名），值为剧集数据。
+    """
+
+    # 将目录路径转换为绝对路径，并确保用户主目录被正确解析
     directory = pathlib.Path(directory).expanduser()
+
+    # 创建有序字典用于存储加载的剧集数据
     episodes = collections.OrderedDict()
+
+    # 记录已加载的总步数
     total = 0
+
+    # 根据 reverse 参数决定是否反转文件加载顺序
     if reverse:
+        # 遍历目录中所有 .npz 文件，并按文件名逆序排序
         for filename in reversed(sorted(directory.glob("*.npz"))):
             try:
+                # 打开并加载 npz 文件中的剧集数据
                 with filename.open("rb") as f:
                     episode = np.load(f)
                     episode = {k: episode[k] for k in episode.keys()}
             except Exception as e:
-                print(f"Could not load episode: {e}")
+                # 如果加载失败，打印错误信息并跳过该文件
+                print(f"无法加载剧集: {e}")
                 continue
-            # extract only filename without extension
+
+            # 提取文件名（不带扩展名）作为键存入字典
             episodes[str(os.path.splitext(os.path.basename(filename))[0])] = episode
+
+            # 累加当前剧集的步数到总步数
             total += len(episode["reward"]) - 1
+
+            # 如果设置了步数限制且已达到或超过限制，停止加载更多文件
             if limit and total >= limit:
                 break
     else:
+        # 遍历目录中所有 .npz 文件，并按文件名正序排序
         for filename in sorted(directory.glob("*.npz")):
             try:
+                # 打开并加载 npz 文件中的剧集数据
                 with filename.open("rb") as f:
                     episode = np.load(f)
                     episode = {k: episode[k] for k in episode.keys()}
             except Exception as e:
-                print(f"Could not load episode: {e}")
+                # 如果加载失败，打印错误信息并跳过该文件
+                print(f"无法加载剧集: {e}")
                 continue
+
+            # 使用文件名作为键存入字典
             episodes[str(filename)] = episode
+
+            # 累加当前剧集的步数到总步数
             total += len(episode["reward"]) - 1
+
+            # 如果设置了步数限制且已达到或超过限制，停止加载更多文件
             if limit and total >= limit:
                 break
+
+    # 返回加载的剧集数据字典
     return episodes
+
 
 
 class SampleDist:
@@ -935,6 +1088,7 @@ class Optimizer:
             "momentum": lambda: torch.optim.SGD(parameters, lr=lr, momentum=0.9),
         }[opt]()
         self._scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        # self._scaler = torch.amp.GradScaler(device_type='cuda', enabled=use_amp)
 
     def __call__(self, loss, params, retain_graph=True):
         assert len(loss.shape) == 0, loss.shape

@@ -193,7 +193,8 @@ class RSSM(nn.Module):
                 )
 
         prior = self.img_step(prev_state, prev_action)
-        x = torch.cat([prior["deter"], embed], -1)
+        # x = torch.cat([prior["deter"], embed], -1)
+        x = torch.cat([prior["deter"].to(embed.device), embed], -1)
         # (batch_size, prior_deter + embed) -> (batch_size, hidden)
         x = self._obs_out_layers(x)
         # (batch_size, hidden) -> (batch_size, stoch, discrete_num)
@@ -307,18 +308,20 @@ class MultiEncoder(nn.Module):
     ):
         super(MultiEncoder, self).__init__()
         excluded = ("is_first", "is_last", "is_terminal", "reward")
-        shapes = {
-            k: v
-            for k, v in shapes.items()
-            if k not in excluded and not k.startswith("log_")
-        }
+        # shapes = {
+        #     k: v
+        #     for k, v in shapes.items()
+        #     if k not in excluded and not k.startswith("log_")
+        #     # if isinstance(k, str) and k not in excluded and not k.startswith("log_")
+        # }
+        shapes = {k: v for k, v in shapes.items() if k not in excluded}
         self.cnn_shapes = {
             k: v for k, v in shapes.items() if len(v) == 3 and re.match(cnn_keys, k)
         }
         self.mlp_shapes = {
             k: v
             for k, v in shapes.items()
-            if len(v) in (1, 2) and re.match(mlp_keys, k)
+            if len(v) in (1, 2) and re.match(mlp_keys, str(k))
         }
         print("Encoder CNN shapes:", self.cnn_shapes)
         print("Encoder MLP shapes:", self.mlp_shapes)
@@ -353,7 +356,13 @@ class MultiEncoder(nn.Module):
         if self.mlp_shapes:
             inputs = torch.cat([obs[k] for k in self.mlp_shapes], -1)
             outputs.append(self._mlp(inputs))
-        outputs = torch.cat(outputs, -1)
+        if len(outputs) > 0:
+            outputs = torch.cat(outputs, -1)
+        else:
+            # 处理空输出的情况，例如返回一个零张量或其他默认值
+            outputs = torch.zeros(0)  # 或其他合适的默认值
+
+        # outputs = torch.cat(outputs, -1)
         return outputs
 
 
@@ -385,7 +394,8 @@ class MultiDecoder(nn.Module):
         self.mlp_shapes = {
             k: v
             for k, v in shapes.items()
-            if len(v) in (1, 2) and re.match(mlp_keys, k)
+            # if len(v) in (1, 2) and re.match(mlp_keys, k)
+            if len(v) in (1, 2) and re.match(mlp_keys, str(k))  # 确保 k 是字符串类型
         }
         print("Decoder CNN shapes:", self.cnn_shapes)
         print("Decoder MLP shapes:", self.mlp_shapes)
@@ -638,7 +648,9 @@ class MLP(nn.Module):
         if isinstance(self._shape, dict):
             self.mean_layer = nn.ModuleDict()
             for name, shape in self._shape.items():
-                self.mean_layer[name] = nn.Linear(inp_dim, np.prod(shape))
+                # self.mean_layer[name] = nn.Linear(inp_dim, np.prod(shape))
+                self.mean_layer[str(name)] = nn.Linear(inp_dim, np.prod(shape))
+
             self.mean_layer.apply(tools.uniform_weight_init(outscale))
             if self._std == "learned":
                 assert dist in ("tanh_normal", "normal", "trunc_normal", "huber"), dist

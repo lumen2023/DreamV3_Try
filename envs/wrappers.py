@@ -12,7 +12,13 @@ class TimeLimit(gym.Wrapper):
 
     def step(self, action):
         assert self._step is not None, "Must reset environment."
-        obs, reward, done, info = self.env.step(action)
+        step_result = self.env.step(action)
+        if len(step_result)==5:
+            obs, reward, done,truncated, info = step_result
+        else:
+            obs, reward, done, info = step_result
+
+        # obs, reward, done, info = self.env.step(action)
         self._step += 1
         if self._step >= self._duration:
             done = True
